@@ -7,9 +7,8 @@ export async function updateSession(request: NextRequest) {
   })
 
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    throw new Error(
-      'Missing Supabase env vars. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local (see https://supabase.com/dashboard/project/_/settings/api)'
-    )
+    console.warn('⚠️ Missing Supabase environment variables')
+    return supabaseResponse
   }
 
   const supabase = createServerClient(
@@ -25,31 +24,60 @@ export async function updateSession(request: NextRequest) {
           supabaseResponse = NextResponse.next({
             request,
           })
-          cookiesToSet.forEach(({ name, value, options }) => supabaseResponse.cookies.set(name, value, options))
+          cookiesToSet.forEach(({ name, value, options }) => 
+            supabaseResponse.cookies.set(name, value, options)
+          )
         },
       },
-    },
+    }
   )
 
+  // Refresh session if expired - this will auto-refresh the token
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/register") &&
-    !request.nextUrl.pathname.startsWith("/forgot-password") &&
-    !request.nextUrl.pathname.startsWith("/") &&
-    request.nextUrl.pathname !== "/" &&
-    !request.nextUrl.pathname.startsWith("/about") &&
-    !request.nextUrl.pathname.startsWith("/academics") &&
-    !request.nextUrl.pathname.startsWith("/admissions") &&
-    !request.nextUrl.pathname.startsWith("/gallery") &&
-    !request.nextUrl.pathname.startsWith("/contact")
-  ) {
+  const pathname = request.nextUrl.pathname
+
+  // Public paths that don't require authentication
+  const publicPaths = [
+    '/',
+    '/login',
+    '/register',
+    '/forgot-password',
+    '/about',
+    '/academics',
+    '/admissions',
+    '/gallery',
+    '/contact'
+  ]
+
+  const isPublicPath = publicPaths.some(path => pathname === path || pathname.startsWith(path + '/'))
+
+  // If accessing a dashboard route without authentication
+  if (!user && pathname.startsWith('/dashboard')) {
+    console.log('🚫 Unauthenticated access to dashboard, redirecting to login')
     const url = request.nextUrl.clone()
-    url.pathname = "/login"
+    url.pathname = '/login'
+    url.searchParams.set('redirectTo', pathname)
+    return NextResponse.redirect(url)
+  }
+
+  // If authenticated and trying to access login/register, redirect to dashboard
+  if (user && (pathname === '/login' || pathname === '/register')) {
+    console.log('✅ Already authenticated, redirecting to dashboard')
+    
+    // Get user role from profile
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const role = profile?.role || user.user_metadata?.role || 'student'
+    
+    const url = request.nextUrl.clone()
+    url.pathname = `/dashboard/${role}`
     return NextResponse.redirect(url)
   }
 
